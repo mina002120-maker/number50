@@ -676,16 +676,16 @@ const TUTORIAL_DATA = {
     },
     // 3. 일부러 틀린 카드 선택
     {
-      target: 'card-아흔',
-      message: '잘했어요! 🎉\n두 번째 칸엔 우리말로 읽어요.\n일부러 \'아흔\'을 눌러볼까요? 👇',
+      target: 'card-쉰',
+      message: '잘했어요! 🎉\n두 번째 칸엔 우리말로 읽어요.\n일부러 \'쉰\'을 눌러볼까요? 👇',
       action: 'click',
-      expectedValue: '아흔',
+      expectedValue: '쉰',
       expectedIdx: 1
     },
     // 4. 카드 재클릭으로 한 칸 수정
     {
       target: 'card-서른',
-      message: '\'아흔\'이 아닌 \'서른\'이에요!\n카드를 다시 누르면 하나만 바뀌어요.\n\'서른\'을 눌러보세요! 👇',
+      message: '\'쉰\'이 아닌 \'서른\'이에요!\n카드를 다시 누르면 하나만 바뀌어요.\n\'서른\'을 눌러보세요! 👇',
       action: 'click',
       expectedValue: '서른',
       expectedIdx: 1
@@ -1678,6 +1678,7 @@ function App() {
     setConceptHeard(null);
     setConceptInterim('');
     const cleanTarget = targetWord.replace(/[^가-힣]/g, '');
+    let gotResult = false;
     recog.onresult = event => {
       let interimText = '';
       let finalText = '';
@@ -1692,6 +1693,7 @@ function App() {
       }
       // 최종 결과 처리
       if (finalText) {
+        gotResult = true;
         const lastResult = event.results[event.results.length - 1];
         let heardText = lastResult[0].transcript.replace(/\s/g, '').replace(/[.,!?~]/g, '');
         let matched = false;
@@ -1710,10 +1712,37 @@ function App() {
         }
       }
     };
-    recog.onerror = () => { setConceptRecording(false); setConceptInterim(''); };
-    recog.onend = () => { setConceptRecording(false); };
+    recog.onerror = e => {
+      gotResult = true; // onend 중복 메시지 방지
+      setConceptRecording(false);
+      setConceptInterim('');
+      if (e && e.error === 'not-allowed') {
+        alert('마이크 사용이 허용되지 않았어요.\n주소창의 자물쇠(🔒)를 눌러 마이크를 "허용"으로 바꿔주세요!');
+        setConceptHeard({ text: '마이크 권한을 켜주세요', correct: false });
+      } else if (e && e.error === 'audio-capture') {
+        setConceptHeard({ text: '마이크를 찾을 수 없어요', correct: false });
+      } else if (e && e.error === 'no-speech') {
+        setConceptHeard({ text: '(못 들었어요)', correct: false });
+      } else {
+        setConceptHeard({ text: '(못 들었어요)', correct: false });
+      }
+    };
+    recog.onend = () => {
+      setConceptRecording(false);
+      setConceptInterim('');
+      // 짧은 단어(십·열 등)라 최종 결과 없이 끝난 경우에도 피드백 제공
+      if (!gotResult) {
+        setConceptHeard({ text: '(못 들었어요)', correct: false });
+        speak('잘 안 들렸어요. 다시 한번 또박또박 말해볼까요?', muted);
+      }
+    };
     recogRef.current = recog;
-    try { recog.start(); } catch (e) { setConceptRecording(false); }
+    try {
+      recog.start();
+    } catch (e) {
+      setConceptRecording(false);
+      setConceptHeard({ text: '(못 들었어요)', correct: false });
+    }
   };
 
   // 녹음 시작
@@ -3143,7 +3172,7 @@ function App() {
           justifyContent: 'center',
           flexWrap: 'wrap'
         }
-      }, S_ORDER.map(c => /*#__PURE__*/React.createElement("button", {
+      }, S_ORDER.slice(0, 5).map(c => /*#__PURE__*/React.createElement("button", {
         key: `s-${c}`,
         onClick: () => onTutorialCardClick(c, 0),
         style: highlightIf(`card-${c}`, {
@@ -3166,7 +3195,7 @@ function App() {
           justifyContent: 'center',
           flexWrap: 'wrap'
         }
-      }, K_ORDER.map(c => /*#__PURE__*/React.createElement("button", {
+      }, K_ORDER.slice(0, 5).map(c => /*#__PURE__*/React.createElement("button", {
         key: `k-${c}`,
         onClick: () => onTutorialCardClick(c, 1),
         style: highlightIf(`card-${c}`, {
@@ -3208,7 +3237,7 @@ function App() {
           gap: 4,
           flexWrap: 'wrap'
         }
-      }, ["1", "2", "3", "4", "5", "6", "7", "8", "9"].map(d => /*#__PURE__*/React.createElement("button", {
+      }, ["1", "2", "3", "4", "5"].map(d => /*#__PURE__*/React.createElement("button", {
         key: `t-${d}`,
         onClick: () => onTutorialCardClick(d, 0, 'tens'),
         style: highlightIf(`card-tens-${d}`, drops[0] !== d ? {
@@ -3316,7 +3345,7 @@ function App() {
           gap: 4,
           flexWrap: 'wrap'
         }
-      }, K_ORDER.map(c => /*#__PURE__*/React.createElement("button", {
+      }, K_ORDER.slice(0, 5).map(c => /*#__PURE__*/React.createElement("button", {
         key: `rt-${c}`,
         onClick: () => onTutorialCardClick(c, 0, 'tens'),
         style: highlightIf(`card-tens-${c}`, drops[0] !== c ? {
@@ -5766,7 +5795,7 @@ function App() {
       fontWeight: 700,
       color: '#475569'
     }
-  }, K_ORDER.map((k, i) => /*#__PURE__*/React.createElement(React.Fragment, {
+  }, K_ORDER.slice(0, 5).map((k, i) => /*#__PURE__*/React.createElement(React.Fragment, {
     key: `k-${i}`
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -7463,7 +7492,7 @@ function App() {
         gap: 10,
         justifyContent: 'center'
       }
-    }, K_ORDER.map((c, i) => /*#__PURE__*/React.createElement(SelectionCard, {
+    }, K_ORDER.slice(0, 5).map((c, i) => /*#__PURE__*/React.createElement(SelectionCard, {
       key: `ro-${c}-${i}`,
       value: c,
       onClick: () => handleCardClick(c, 0),
@@ -7518,7 +7547,7 @@ function App() {
         overflow: 'hidden',
         justifyContent: 'center'
       }
-    }, S_ORDER.map((c, i) => /*#__PURE__*/React.createElement(SelectionCard, {
+    }, S_ORDER.slice(0, 5).map((c, i) => /*#__PURE__*/React.createElement(SelectionCard, {
       key: `s-${c}-${i}`,
       value: c,
       onClick: () => handleCardClick(c, 0),
@@ -7533,7 +7562,7 @@ function App() {
         overflow: 'hidden',
         justifyContent: 'center'
       }
-    }, K_ORDER.map((c, i) => /*#__PURE__*/React.createElement(SelectionCard, {
+    }, K_ORDER.slice(0, 5).map((c, i) => /*#__PURE__*/React.createElement(SelectionCard, {
       key: `k-${c}-${i}`,
       value: c,
       onClick: () => handleCardClick(c, 1),
@@ -7574,7 +7603,7 @@ function App() {
         gap: 10,
         justifyContent: 'center'
       }
-    }, ["1", "2", "3", "4", "5", "6", "7", "8", "9"].map(d => /*#__PURE__*/React.createElement(SelectionCard, {
+    }, ["1", "2", "3", "4", "5"].map(d => /*#__PURE__*/React.createElement(SelectionCard, {
       key: `t-${d}`,
       value: d,
       onClick: () => handleCardClick(d, 0),

@@ -1737,12 +1737,18 @@ function App() {
       }
     };
     recogRef.current = recog;
-    try {
-      recog.start();
-    } catch (e) {
-      setConceptRecording(false);
-      setConceptHeard({ text: '(못 들었어요)', correct: false });
-    }
+    // '듣기'(TTS)가 재생 중이면 인식기가 마이크 오디오를 받지 못해 결과가 안 나옴
+    // → TTS를 먼저 중지하고, 오디오 장치가 풀릴 시간을 약간 준 뒤 인식 시작
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    setTimeout(() => {
+      if (recogRef.current !== recog) return; // 그새 다른 녹음이 시작되면 취소
+      try {
+        recog.start();
+      } catch (e) {
+        setConceptRecording(false);
+        setConceptHeard({ text: '(못 들었어요)', correct: false });
+      }
+    }, 250);
   };
 
   // 녹음 시작

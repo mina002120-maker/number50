@@ -1819,6 +1819,8 @@ function App() {
     setInterimTranscript('');
     setVoiceResult(null);
     setShowHint(false);
+    let gotFinal = false;
+    let lastInterimRaw = '';
     recog.onresult = event => {
       let interimText = '';
       let finalText = '';
@@ -1832,23 +1834,29 @@ function App() {
       }
       // 중간 결과는 실시간 표시
       if (interimText) {
+        lastInterimRaw = interimText;
         let cleanText = interimText.replace(/\s/g, '').replace(/[.,!?~]/g, '');
         // 첫 번째 읽기면 그대로, 두 번째면 reading1의 반대 방법으로 변환
         const useSino = !reading1 ? true : reading1.method !== 'sino';
         cleanText = cleanText.replace(new RegExp(p.q.toString(), 'g'), useSino ? p.sinoReading : p.nativeReading);
         setInterimTranscript(useSino ? convertDigitsToSino(cleanText) : convertDigitsToNative(cleanText));
       }
-
-      // 최종 결과 처리
-      if (finalText) {
+      // 최종 결과가 확정되면 처리
+      if (finalText) handleFinal(event.results[event.results.length - 1]);
+    };
+    // 최종 인식 결과(또는 중간 인식 폴백)로 정답을 판정
+    const handleFinal = lastRes => {
+      if (gotFinal) return;
+      gotFinal = true;
+      {
         // 가장 신뢰도 높은 첫 번째 결과
-        const primaryRaw = event.results[event.results.length - 1][0].transcript;
+        const primaryRaw = lastRes[0].transcript;
         const primaryClean = primaryRaw.replace(/\s/g, '').replace(/[.,!?~]/g, '');
 
         // 모든 alternatives 수집 - 학생이 실제로 어떻게 발음했는지 파악용
         const allAlternatives = [];
-        for (let i = 0; i < event.results[event.results.length - 1].length; i++) {
-          const altText = event.results[event.results.length - 1][i].transcript.replace(/\s/g, '').replace(/[.,!?~]/g, '');
+        for (let i = 0; i < lastRes.length; i++) {
+          const altText = lastRes[i].transcript.replace(/\s/g, '').replace(/[.,!?~]/g, '');
           allAlternatives.push(altText);
         }
         const cleanSinoReading = p.sinoReading.replace(/[^가-힣]/g, '');
@@ -2038,11 +2046,17 @@ function App() {
     recog.onerror = e => {
       setIsRecording(false);
       setInterimTranscript('');
+      if (gotFinal) return; // 이미 인식 결과를 처리했으면 오류 메시지로 덮어쓰지 않음
+      // 중간 인식이 잡혔는데 최종 결과가 안 나온 경우 → 중간 인식으로 판정 ('인식됐는데 안 들렸어요' 방지)
+      if (e.error === 'no-speech' && lastInterimRaw) { handleFinal([{ transcript: lastInterimRaw }]); return; }
       if (e.error === 'no-speech') setTranscript('소리가 들리지 않아요. 다시 시도해주세요!');else if (e.error === 'not-allowed') setTranscript('마이크 사용이 거부되었어요.');else setTranscript('인식에 실패했어요. 다시 시도해주세요!');
     };
     recog.onend = () => {
       setIsRecording(false);
       setInterimTranscript('');
+      if (gotFinal) return;
+      // 최종 결과 없이 끝났지만 중간 인식이 있으면 그것으로 판정
+      if (lastInterimRaw) handleFinal([{ transcript: lastInterimRaw }]);
     };
     recogRef.current = recog;
     try {

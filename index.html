@@ -876,6 +876,28 @@ const speak = (text, muted) => {
   window.speechSynthesis.speak(u);
 };
 
+// 한글 음절을 초성+중성으로 분해 (받침/된소리 차이를 무시한 비교용)
+// 예) "십" → "ㅅㅣ", "시" → "ㅅㅣ", "씹" → "ㅅㅣ"  (서로 같게 취급)
+function decomposeKo(str) {
+  const CHO = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
+  const JUNG = ['ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ'];
+  const TENSE = { 'ㄲ': 'ㄱ', 'ㄸ': 'ㄷ', 'ㅃ': 'ㅂ', 'ㅆ': 'ㅅ', 'ㅉ': 'ㅈ' };
+  let out = '';
+  for (const ch of String(str)) {
+    const code = ch.charCodeAt(0) - 0xAC00;
+    if (code >= 0 && code <= 11171) {
+      const cho = Math.floor(code / 588);
+      const jung = Math.floor((code % 588) / 28);
+      let c = CHO[cho];
+      c = TENSE[c] || c;
+      out += c + JUNG[jung]; // 종성(받침) 제외
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 /* 숫자를 한자어 읽기로 변환 (예: 49 -> 사십구) */
 function convertDigitsToSino(text) {
   return text.replace(/[0-9]+/g, match => {
@@ -1678,7 +1700,29 @@ function App() {
     setConceptHeard(null);
     setConceptInterim('');
     const cleanTarget = targetWord.replace(/[^가-힣]/g, '');
+    const tgtNorm = decomposeKo(cleanTarget);
+    // 짧은 단어(십·열·일~구 등)는 받침·된소리 인식이 불안정하므로 너그럽게 판정
+    const isConceptMatch = raw => {
+      const a = (raw || '').replace(/[^가-힣]/g, '');
+      if (!a) return false;
+      if (a === cleanTarget) return true; // 정확히 일치
+      if (cleanTarget.length >= 2 && a.includes(cleanTarget)) return true; // 다음절 단어 포함
+      if (decomposeKo(a) === tgtNorm) return true; // 받침/된소리 차이 허용 (십↔시, 십↔씹)
+      return false;
+    };
     let gotResult = false;
+    let lastInterim = '';
+    const finishConcept = (matched, heardText) => {
+      setConceptInterim('');
+      setConceptHeard({ text: heardText || '(못 들었어요)', correct: matched });
+      setConceptRecording(false);
+      if (matched) {
+        if (window.confetti) window.confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 }, colors: ['#22c55e', '#fbbf24', '#3b82f6'] });
+        speak('정답이에요! 잘 따라 말했어요!', muted);
+      } else {
+        speak('다시 한번 따라 말해볼까요?', muted);
+      }
+    };
     recog.onresult = event => {
       let interimText = '';
       let finalText = '';
@@ -1689,27 +1733,23 @@ function App() {
       }
       // 말하는 중 실시간 텍스트 표시
       if (interimText) {
+        lastInterim = interimText;
         setConceptInterim(interimText.replace(/\s/g, ''));
       }
-      // 최종 결과 처리
+      // 최종 결과 처리 (모든 후보를 너그럽게 비교)
       if (finalText) {
         gotResult = true;
-        const lastResult = event.results[event.results.length - 1];
-        let heardText = lastResult[0].transcript.replace(/\s/g, '').replace(/[.,!?~]/g, '');
+        const last = event.results[event.results.length - 1];
+        let heardText = last[0].transcript.replace(/\s/g, '').replace(/[.,!?~]/g, '');
         let matched = false;
-        for (let i = 0; i < lastResult.length; i++) {
-          const alt = lastResult[i].transcript.replace(/[^가-힣]/g, '');
-          if (alt === cleanTarget) { matched = true; heardText = alt; break; }
+        for (let i = 0; i < last.length; i++) {
+          if (isConceptMatch(last[i].transcript)) {
+            matched = true;
+            heardText = last[i].transcript.replace(/[^가-힣]/g, '') || heardText;
+            break;
+          }
         }
-        setConceptInterim('');
-        setConceptHeard({ text: heardText || '(못 들었어요)', correct: matched });
-        setConceptRecording(false);
-        if (matched) {
-          if (window.confetti) window.confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 }, colors: ['#22c55e', '#fbbf24', '#3b82f6'] });
-          speak('정답이에요! 잘 따라 말했어요!', muted);
-        } else {
-          speak('다시 한번 따라 말해볼까요?', muted);
-        }
+        finishConcept(matched, heardText);
       }
     };
     recog.onerror = e => {
@@ -1721,8 +1761,6 @@ function App() {
         setConceptHeard({ text: '마이크 권한을 켜주세요', correct: false });
       } else if (e && e.error === 'audio-capture') {
         setConceptHeard({ text: '마이크를 찾을 수 없어요', correct: false });
-      } else if (e && e.error === 'no-speech') {
-        setConceptHeard({ text: '(못 들었어요)', correct: false });
       } else {
         setConceptHeard({ text: '(못 들었어요)', correct: false });
       }
@@ -1730,8 +1768,11 @@ function App() {
     recog.onend = () => {
       setConceptRecording(false);
       setConceptInterim('');
-      // 짧은 단어(십·열 등)라 최종 결과 없이 끝난 경우에도 피드백 제공
-      if (!gotResult) {
+      if (gotResult) return;
+      // 짧은 단어라 최종 결과 없이 끝난 경우: 마지막 중간 인식으로 판정
+      if (lastInterim) {
+        finishConcept(isConceptMatch(lastInterim), lastInterim.replace(/[^가-힣]/g, '') || '(못 들었어요)');
+      } else {
         setConceptHeard({ text: '(못 들었어요)', correct: false });
         speak('잘 안 들렸어요. 다시 한번 또박또박 말해볼까요?', muted);
       }
@@ -4546,8 +4587,16 @@ function App() {
       if (val) {
         const student = students.find(s => s.num == val);
         setCurrentUser(student);
+        // 이전에 완료한 단계 복원 → 1~4단계를 모두 마쳤다면 5단계 잠금 해제
+        setCompleted([]);
+        callGas('getProgress', {
+          studentNum: student.num
+        }).then(res => {
+          if (res && Array.isArray(res.completed)) setCompleted(res.completed);
+        });
       } else {
         setCurrentUser(null);
+        setCompleted([]);
       }
     },
     style: {

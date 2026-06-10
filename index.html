@@ -898,6 +898,24 @@ function decomposeKo(str) {
   return out;
 }
 
+/* 단계 완료 기록을 이 기기(브라우저)에 저장/복원 — 1~4단계를 한 번 끝내면 재접속해도 5단계가 계속 열림 */
+function loadClearedStages(studentNum) {
+  try {
+    const raw = window.localStorage.getItem('cleared50_' + studentNum);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(n => [1, 2, 3, 4].includes(n)) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function saveClearedStages(studentNum, stages) {
+  try {
+    const keep = (stages || []).filter(n => [1, 2, 3, 4].includes(n));
+    window.localStorage.setItem('cleared50_' + studentNum, JSON.stringify(keep));
+  } catch (e) {}
+}
+
 /* 숫자를 한자어 읽기로 변환 (예: 49 -> 사십구) */
 function convertDigitsToSino(text) {
   return text.replace(/[0-9]+/g, match => {
@@ -1240,6 +1258,10 @@ function App() {
   const [phase, setPhase] = useState(1);
   const [probIdx, setProbIdx] = useState(0);
   const [completed, setCompleted] = useState([]);
+  // completed가 바뀔 때마다 이 기기에 저장 → 1~4단계 완료 상태가 재접속 후에도 유지됨
+  useEffect(() => {
+    if (currentUser && completed.length > 0) saveClearedStages(currentUser.num, completed);
+  }, [completed, currentUser]);
   const [feedback, setFeedback] = useState(null);
   const [drops, setDrops] = useState([]);
   const [muted, setMuted] = useState(true);
@@ -1510,8 +1532,8 @@ function App() {
       setCombo(newCombo);
       setCollectedStars(s => s + 1);
 
-      // 5단계 도전 모드 정답 시 점수 증가 + 즉시 다음 문제
-      if (phase === 5) {
+      // 5단계 도전 모드 정답 시 점수 증가 + 즉시 다음 문제 (복습 모드 제외)
+      if (phase === 5 && !reviewMode) {
         setChallengeScore(s => s + 1);
         speak('정답!', muted);
         if (window.confetti) window.confetti({
@@ -4601,13 +4623,21 @@ function App() {
       if (val) {
         const student = students.find(s => s.num == val);
         setCurrentUser(student);
-        // 이전에 완료한 단계 복원 → 1~4단계를 모두 마쳤다면 5단계 잠금 해제
-        setCompleted([]);
+        // 1) 이 기기에 저장된 완료 단계를 즉시 복원 (재배포·네트워크 없이도 5단계 잠금 해제 유지)
+        const local = loadClearedStages(student.num);
+        setCompleted(local);
+        // 2) 서버 기록과 병합 (다른 기기에서 완료한 경우까지 반영)
         callGas('getProgress', {
           studentNum: student.num
         }).then(res => {
-          if (res && Array.isArray(res.completed)) setCompleted(res.completed);
-        });
+          if (res && Array.isArray(res.completed)) {
+            setCompleted(prev => {
+              const merged = Array.from(new Set([...prev, ...res.completed]));
+              saveClearedStages(student.num, merged);
+              return merged;
+            });
+          }
+        }).catch(() => {});
       } else {
         setCurrentUser(null);
         setCompleted([]);
@@ -6508,8 +6538,15 @@ function App() {
       fontWeight: 900
     };
 
-    // 학생이 말한 내용 (한글만)
-    const spoken = transcript.replace(/\s/g, '').replace(/[^가-힣]/g, '');
+    // 학생이 말한 내용 (한글만, 인식기가 숫자로 반환한 경우 읽기 방법에 맞게 변환)
+    let spoken = transcript.replace(/\s/g, '').replace(/[^가-힣]/g, '');
+    if (!spoken && /[0-9]/.test(transcript)) {
+      // 인식기가 '16', '17' 등 숫자로 돌려준 경우: isSino 여부에 맞춰 변환
+      // → 부분 매칭(십의 자리/일의 자리 힌트)도 제대로 동작하게 됨
+      const raw = transcript.replace(/\s/g, '');
+      const converted = isSino ? convertDigitsToSino(raw) : convertDigitsToNative(raw);
+      spoken = converted.replace(/[^가-힣]/g, '') || raw;
+    }
 
     // 정답 (현재 단계)
     const targetReading = isSino ? p.sinoReading : p.nativeReading;
@@ -6518,7 +6555,7 @@ function App() {
     const cleanOpposite = oppositeReading.replace(/[^가-힣]/g, '');
 
     // 정답에 쓰인 십의 자리 숫자/낱개 (예시 만들 때 피할 값)
-    const tensExamplePool = [1, 2, 3, 4, 5, 6, 7, 8, 9].filter(t => t !== tens);
+    const tensExamplePool = [1, 2, 3, 4, 5].filter(t => t !== tens);
     const tensEx = [tensExamplePool[0], tensExamplePool[1]];
     const tensExLabel = t => isSino ? /*#__PURE__*/React.createElement(React.Fragment, null, `${t * 10}`, '은 ', /*#__PURE__*/React.createElement("span", {
       style: exampleStyle
@@ -6981,7 +7018,7 @@ function App() {
         flexDirection: 'column',
         overflow: 'hidden'
       }
-    }, phase === 5 && /*#__PURE__*/React.createElement("div", {
+    }, phase === 5 && !reviewMode && /*#__PURE__*/React.createElement("div", {
       style: {
         background: challengeOver ? '#fee2e2' : timeLeft <= 10 ? '#fef2f2' : 'linear-gradient(90deg, #fef3c7, #fde68a)',
         padding: '8px 20px',
@@ -7824,181 +7861,52 @@ function App() {
       className: "stamp-in",
       style: {
         background: 'white',
-        padding: '40px 56px',
-        borderRadius: 48,
+        padding: '32px 36px',
+        borderRadius: 40,
         boxShadow: '0 40px 100px rgba(0,0,0,0.25)',
-        border: '12px solid #fde68a',
+        border: '10px solid #fde68a',
         textAlign: 'center',
-        maxWidth: 700,
-        width: '90%',
-        maxHeight: '90vh',
+        maxWidth: 880,
+        width: '94%',
+        maxHeight: '92vh',
         overflowY: 'auto'
       }
-    }, challengeLevel && /*#__PURE__*/React.createElement("div", {
-      style: {
-        background: challengeLevel.bg,
-        borderRadius: 24,
-        padding: '20px 32px',
-        marginBottom: 24,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 16
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 64
-      }
-    }, challengeLevel.icon), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 18,
-        color: 'rgba(255,255,255,0.85)',
-        fontWeight: 700
-      }
-    }, challengeLevel.label, " \uB3C4\uC804 \uC644\uB8CC!"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 38,
-        fontWeight: 900,
-        color: 'white'
-      }
-    }, challengeLevel.title), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 16,
-        color: 'rgba(255,255,255,0.8)',
-        fontWeight: 700
-      }
-    }, challengeLevel.subtitle))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 20,
-        justifyContent: 'center',
-        marginBottom: 28
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        background: '#f0fdf4',
-        borderRadius: 24,
-        padding: '20px 32px',
-        border: '3px solid #bbf7d0'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 15,
-        color: '#64748b',
-        fontWeight: 700,
-        marginBottom: 4
-      }
-    }, "\uC815\uB2F5"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 60,
-        fontWeight: 900,
-        color: '#16a34a',
-        lineHeight: 1
-      }
-    }, challengeScore, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 24
-      }
-    }, "\uAC1C"))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        background: '#f8fafc',
-        borderRadius: 24,
-        padding: '20px 32px',
-        border: '3px solid #e2e8f0'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 15,
-        color: '#64748b',
-        fontWeight: 700,
-        marginBottom: 4
-      }
-    }, "\uC804\uCCB4"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 60,
-        fontWeight: 900,
-        color: '#475569',
-        lineHeight: 1
-      }
-    }, problems.length, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 24
-      }
-    }, "\uAC1C"))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        background: '#fef3c7',
-        borderRadius: 24,
-        padding: '20px 32px',
-        border: '3px solid #fde68a'
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 15,
-        color: '#92400e',
-        fontWeight: 700,
-        marginBottom: 4
-      }
-    }, "\uC815\uB2F5\uB960"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 60,
-        fontWeight: 900,
-        color: '#d97706',
-        lineHeight: 1
-      }
-    }, Math.round(challengeScore / problems.length * 100), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 24
-      }
-    }, "%")))), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 28,
-        fontWeight: 900,
-        color: '#166534',
-        marginBottom: 28
-      }
-    }, challengeScore === problems.length ? '🎊 완벽해요! 모든 문제를 다 맞혔어요!' : challengeScore >= problems.length * 0.8 ? '🌟 훌륭해요! 거의 다 맞혔어요!' : challengeScore >= problems.length * 0.5 ? '👍 잘했어요! 다음엔 더 잘할 수 있어요!' : '💪 계속 연습하면 분명히 잘할 수 있어요!'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 16,
-        justifyContent: 'center'
-      }
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => {
-        setStamp(false);
-        setChallengeOver(false);
-        setShowConfig5(true);
-      },
-      style: {
-        padding: '18px 36px',
-        background: challengeLevel?.bg || '#f97316',
-        color: 'white',
-        borderRadius: 24,
-        fontSize: 26,
-        fontWeight: 900,
-        border: 'none',
-        cursor: 'pointer',
-        boxShadow: '0 8px 20px rgba(249,115,22,0.3)',
-        fontFamily: 'inherit'
-      }
-    }, "\u26A1 \uB2E4\uC2DC \uB3C4\uC804!"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => {
-        setStamp(false);
-        setChallengeOver(false);
-        setTimerActive(false);
-        setStep('map');
-      },
-      style: {
-        padding: '18px 36px',
-        background: 'white',
-        color: '#475569',
-        borderRadius: 24,
-        fontSize: 26,
-        fontWeight: 900,
-        border: '3px solid #e2e8f0',
-        cursor: 'pointer',
-        fontFamily: 'inherit'
-      }
-    }, "\uD83C\uDFE0 \uC9C0\uB3C4\uB85C")))), phase !== 5 && stamp && /*#__PURE__*/React.createElement("div", {
+    }, (() => {
+      // ── 5단계 결과 분류 ──
+      // 5단계는 정답일 때만 진도가 나가므로 challengeScore 이전 = 통과, 이후 = 미통과
+      const inWrong = pr => wrong.find(w => w.id === pr.id);
+      const firstTry = problems.filter((pr, i) => i < challengeScore && !inWrong(pr));
+      const wrongList = problems.filter(pr => inWrong(pr));
+      const unsolved = problems.filter((pr, i) => i >= challengeScore && !inWrong(pr));
+      const retryProblems = problems.filter((pr, i) => inWrong(pr) || i >= challengeScore);
+      const allCorrect = wrongList.length === 0 && unsolved.length === 0;
+      const headMsg = allCorrect ? '\uD83C\uDF8A \uC644\uBCBD\uD574\uC694! \uBAA8\uB4E0 \uBB38\uC81C\uB97C \uB2E4 \uB9DE\uD614\uC5B4\uC694!' : challengeScore >= problems.length * 0.8 ? '\uD83C\uDF1F \uD6CC\uB96D\uD574\uC694! \uAC70\uC758 \uB2E4 \uB9DE\uD614\uC5B4\uC694!' : challengeScore >= problems.length * 0.5 ? '\uD83D\uDCAA \u26A1 \uC870\uAE08\uB9CC \uB354! \uB2E4\uC2DC \uB3C4\uC804\uD574\uBCFC\uAE4C\uC694?' : '\uD83D\uDCAA \uACC4\uC18D \uC5F0\uC2B5\uD558\uBA74 \uBD84\uBA85\uD788 \uC798\uD560 \uC218 \uC788\uC5B4\uC694!';
+      const infoBox = (label, value, bg, bd, color) => /*#__PURE__*/React.createElement("div", {
+        style: { flex: 1, minWidth: 150, background: bg, border: '2px solid ' + bd, borderRadius: 20, padding: '12px 16px' }
+      }, /*#__PURE__*/React.createElement("div", { style: { fontSize: 14, color: '#64748b', fontWeight: 700, marginBottom: 4 } }, label), /*#__PURE__*/React.createElement("div", { style: { fontSize: 22, fontWeight: 900, color: color } }, value));
+      const resultBox = (icon, label, list, bg, bd, chipBg, chipColor) => /*#__PURE__*/React.createElement("div", {
+        style: { flex: 1, minWidth: 160, background: bg, border: '2px solid ' + bd, borderRadius: 20, padding: '14px 16px', textAlign: 'left' }
+      }, /*#__PURE__*/React.createElement("div", { style: { fontSize: 18, fontWeight: 900, color: '#334155', marginBottom: 10 } }, icon + ' ' + label), list.length > 0 ? /*#__PURE__*/React.createElement("div", { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } }, list.map((pr, i) => /*#__PURE__*/React.createElement("span", { key: i, style: { background: chipBg, color: chipColor, fontWeight: 900, fontSize: 18, padding: '6px 12px', borderRadius: 12, border: '1px solid ' + bd } }, pr.q))) : /*#__PURE__*/React.createElement("div", { style: { fontSize: 15, color: '#94a3b8', fontWeight: 700 } }, '\uC5C6\uC5B4\uC694'));
+      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", { style: { fontSize: 56, marginBottom: 2, textAlign: 'center' } }, "\uD83C\uDFC6"), /*#__PURE__*/React.createElement("h2", { style: { fontSize: 32, fontWeight: 900, color: '#ea580c', margin: '0 0 16px', textAlign: 'center' } }, '[' + (currentUser?.name || '\uB098') + '] \uD559\uC2B5 \uACB0\uACFC \uBCF4\uACE0\uC11C'), /*#__PURE__*/React.createElement("div", { style: { border: '2px solid #e2e8f0', borderRadius: 18, padding: '14px 20px', marginBottom: 16, fontSize: 20, fontWeight: 800, color: '#475569', textAlign: 'center' } }, headMsg), /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' } }, infoBox('\uD559\uC2B5\uC790 \uC131\uBA85', currentUser?.name || '\uB098', '#eff6ff', '#bfdbfe', '#2563eb'), infoBox('\uD559\uC2B5 \uB2E8\uACC4', '5\uB2E8\uACC4 \uBE60\uB978 \uB3C4\uC804', '#fefce8', '#fde68a', '#a16207'), infoBox('\uD559\uC2B5\uD55C \uB0A0\uC9DC', new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' }), '#f0fdf4', '#bbf7d0', '#16a34a')), /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap', alignItems: 'stretch' } }, resultBox('\u2705', '\uD55C\uBC88\uC5D0 \uD480 \uBB38\uC81C', firstTry, '#f0fdf4', '#bbf7d0', 'white', '#16a34a'), resultBox('\uD83D\uDD04', '\uD2C0\uB9B0 \uBB38\uC81C', wrongList, '#fff7ed', '#fed7aa', 'white', '#ea580c'), resultBox('\u23F0', '\uBABB \uD480 \uBB38\uC81C', unsolved, '#f8fafc', '#e2e8f0', '#eef2f6', '#475569')), /*#__PURE__*/React.createElement("div", { style: { display: 'flex', gap: 12 } }, /*#__PURE__*/React.createElement("button", {
+        onClick: () => { setStamp(false); setChallengeOver(false); setTimerActive(false); setStep('map'); },
+        style: { flex: allCorrect ? 1 : '0 0 auto', padding: '16px 28px', background: '#f1f5f9', color: '#475569', borderRadius: 20, fontSize: 22, fontWeight: 900, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }
+      }, "\uD83C\uDFE0 \uBA54\uC778 \uBA54\uB274\uB85C"), !allCorrect && /*#__PURE__*/React.createElement("button", {
+        onClick: () => {
+          setWrong(retryProblems);
+          setReviewMode(true);
+          setStamp(false);
+          setChallengeOver(false);
+          setTimerActive(false);
+          setProbIdx(0);
+          setChallengeScore(0);
+          setFeedback(null);
+          setDrops(retryProblems[0] && retryProblems[0].ans ? new Array(retryProblems[0].ans.length).fill(null) : []);
+          setTranscript('');
+          setVoiceResult(null);
+        },
+        style: { flex: 1, padding: '16px 28px', background: '#ea580c', color: 'white', borderRadius: 20, fontSize: 22, fontWeight: 900, border: 'none', cursor: 'pointer', boxShadow: '0 8px 20px rgba(234,88,12,0.3)', fontFamily: 'inherit' }
+      }, "\uD83D\uDD04 \uD2C0\uB9B0\u00B7\uBABB \uD480 \uBB38\uC81C \uB2E4\uC2DC \uD480\uAE30")));
+    })())), phase !== 5 && stamp && /*#__PURE__*/React.createElement("div", {
       style: {
         position: 'absolute',
         inset: 0,
